@@ -105,6 +105,7 @@
             :ci="cards?.ci ?? null"
             :stale-work="cards?.staleWork ?? null"
             :session-usage="cards?.sessionUsage ?? null"
+            :is-stale="isStale"
           />
         </div>
 
@@ -143,6 +144,8 @@
             <StaleWorkTable
               :issues="snapshot.issues"
               :pull-requests="snapshot.pullRequests"
+              :state="cards?.staleWork?.status ?? null"
+              :message="cards?.staleWork?.message ?? null"
             />
           </UiCard>
         </div>

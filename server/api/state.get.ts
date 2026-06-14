@@ -9,7 +9,11 @@ export default defineEventHandler(async (event) => {
   const today = new Date().toISOString().slice(0, 10)
   const fromDay = new Date(`${today}T00:00:00Z`)
   fromDay.setUTCDate(fromDay.getUTCDate() - 27)
-  const dashboardWindow = buildDashboardWindow(getDailyMetricsRange(fromDay.toISOString().slice(0, 10), today), new Date())
+  const dashboardWindow = buildDashboardWindow(
+    getDailyMetricsRange(fromDay.toISOString().slice(0, 10), today),
+    new Date(),
+    state.isStale,
+  )
 
   return {
     ...state,

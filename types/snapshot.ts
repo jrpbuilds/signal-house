@@ -49,6 +49,8 @@ export interface DashboardWindowThroughputSummary {
   prsCreated: number
   prsMerged: number
   totalCommits: number
+  status: DashboardPanelStatus
+  message: string | null
 }
 
 export interface DashboardWindowCycleTimeSummary {
@@ -57,6 +59,8 @@ export interface DashboardWindowCycleTimeSummary {
   p95Days: number | null
   sampleSize: number
   sourceDay: string | null
+  status: DashboardPanelStatus
+  message: string | null
 }
 
 export interface DashboardWindowCISummary {
@@ -66,6 +70,8 @@ export interface DashboardWindowCISummary {
   passRate: number | null
   averageDurationMs: number | null
   sourceDays: number
+  status: DashboardPanelStatus
+  message: string | null
 }
 
 export interface DashboardWindowStaleWorkSummary {
@@ -73,11 +79,15 @@ export interface DashboardWindowStaleWorkSummary {
   stalePrs: number
   capturedAt: string | null
   reflectsCompleteData: boolean | null
+  status: DashboardPanelStatus
+  message: string | null
 }
 
 export interface DashboardWindowSessionSummary {
   totalSessions: number
   sessionErrorCount: number
+  status: DashboardPanelStatus
+  message: string | null
 }
 
 export interface DashboardWindowCoverage {
@@ -96,6 +106,15 @@ export interface DashboardWindowCards {
   staleWork: DashboardWindowStaleWorkSummary
   sessionUsage: DashboardWindowSessionSummary
 }
+
+export type DashboardPanelStatus =
+  | 'available'
+  | 'partial'
+  | 'unconfigured'
+  | 'unavailable'
+  | 'error'
+  | 'empty'
+  | 'stale'
 
 export interface DashboardWindow {
   startDay: string

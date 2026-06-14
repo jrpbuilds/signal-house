@@ -1,6 +1,6 @@
 <template>
   <div class="stale-table-wrapper">
-    <table v-if="items.length > 0" class="stale-table">
+    <table v-if="!isBlockedState && items.length > 0" class="stale-table">
       <thead>
         <tr>
           <th class="col-type">Type</th>
@@ -33,8 +33,8 @@
     </table>
     <EmptyState
       v-else
-      message="No stale or blocked work"
-      hint="All tracked items are up to date"
+      :message="emptyMessage"
+      :hint="emptyHint"
     />
   </div>
 </template>
@@ -42,6 +42,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { IssueMetric, PullRequestMetric } from '../types/metrics'
+import type { DashboardPanelStatus } from '../types/snapshot'
 
 interface StaleItem {
   id: string
@@ -57,10 +58,21 @@ interface StaleItem {
 const props = defineProps<{
   issues: IssueMetric[]
   pullRequests: PullRequestMetric[]
+  state?: DashboardPanelStatus | null
+  message?: string | null
 }>()
 
 const STALE_ISSUE_DAYS = 14
 const STALE_PR_DAYS = 7
+
+const isBlockedState = computed(() => props.state === 'unconfigured' || props.state === 'unavailable' || props.state === 'error')
+
+const emptyMessage = computed(() => props.message ?? 'No stale or blocked work')
+
+const emptyHint = computed(() => {
+  if (isBlockedState.value) return 'GitHub issues and pull requests are required'
+  return 'All tracked items are up to date'
+})
 
 const items = computed<StaleItem[]>(() => {
   const now = Date.now()
