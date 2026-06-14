@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildDashboardWindow } from '../dashboard-state'
 
 function makeRow(day: string, overrides: Partial<import('../../../types/daily-metrics').DailyMetricsRow> = {}) {
@@ -33,6 +33,18 @@ function makeRow(day: string, overrides: Partial<import('../../../types/daily-me
 }
 
 describe('buildDashboardWindow', () => {
+  beforeEach(() => {
+    vi.stubEnv('GITHUB_TOKEN', 'ghp_test')
+    vi.stubEnv('GITHUB_OWNER', 'barkley-clawd')
+    vi.stubEnv('GITHUB_REPO', 'engineering-metrics-dashboard')
+    vi.stubEnv('GIT_REPOS', '/tmp/repo-a')
+    vi.stubEnv('SESSIONS_PERIOD_DAYS', '30')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   it('normalizes the response to a 28-day ascending series with explicit gaps', () => {
     const window = buildDashboardWindow([
       makeRow('2026-06-14', {
@@ -87,6 +99,8 @@ describe('buildDashboardWindow', () => {
       prsCreated: 5,
       prsMerged: 6,
       totalCommits: 8,
+      status: 'partial',
+      message: 'Partial data - one or more throughput sources failed during the last refresh',
     })
     expect(window.cards.cycleTime).toMatchObject({
       averageDays: 1.5,
@@ -94,6 +108,8 @@ describe('buildDashboardWindow', () => {
       p95Days: 2.8,
       sampleSize: 9,
       sourceDay: '2026-06-14',
+      status: 'available',
+      message: null,
     })
     expect(window.cards.ci).toMatchObject({
       totalRuns: 12,
@@ -102,16 +118,22 @@ describe('buildDashboardWindow', () => {
       passRate: 0.75,
       averageDurationMs: 1300,
       sourceDays: 2,
+      status: 'available',
+      message: null,
     })
     expect(window.cards.staleWork).toMatchObject({
       staleIssues: 3,
       stalePrs: 2,
       capturedAt: '2026-06-14T12:00:00.000Z',
       reflectsCompleteData: true,
+      status: 'available',
+      message: null,
     })
     expect(window.cards.sessionUsage).toMatchObject({
       totalSessions: 12,
       sessionErrorCount: 3,
+      status: 'available',
+      message: null,
     })
     expect(window.coverage).toMatchObject({
       totalDays: 28,
@@ -149,5 +171,34 @@ describe('buildDashboardWindow', () => {
     expect(window.coverage.isComplete).toBe(true)
     expect(window.warnings).toHaveLength(0)
     expect(window.cards.throughput.totalCommits).toBe(28)
+  })
+
+  it('marks healthy panels stale when the dashboard cache is stale', () => {
+    const window = buildDashboardWindow([
+      makeRow('2026-06-14', {
+        issuesOpened: 1,
+        issuesClosed: 1,
+        prsCreated: 1,
+        prsMerged: 1,
+        totalCommits: 1,
+        avgCycleTimeDays: 2,
+        medianCycleTimeDays: 1.5,
+        p95CycleTimeDays: 3,
+        cycleTimeSampleSize: 5,
+        ciTotalRuns: 4,
+        ciPassCount: 3,
+        ciFailCount: 1,
+        ciPassRate: 0.75,
+        ciAvgDurationMs: 900,
+        totalSessions: 2,
+      }),
+    ], new Date('2026-06-14T12:00:00Z'), true)
+
+    expect(window.cards.throughput.status).toBe('stale')
+    expect(window.cards.cycleTime.status).toBe('stale')
+    expect(window.cards.ci.status).toBe('stale')
+    expect(window.cards.staleWork.status).toBe('stale')
+    expect(window.cards.sessionUsage.status).toBe('stale')
+    expect(window.cards.throughput.message).toBe('Cached data may be stale')
   })
 })

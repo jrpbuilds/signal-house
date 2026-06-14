@@ -25,6 +25,11 @@ describe('GET /api/state', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-06-14T12:00:00Z'))
     vi.clearAllMocks()
+    vi.stubEnv('GITHUB_TOKEN', 'ghp_test')
+    vi.stubEnv('GITHUB_OWNER', 'barkley-clawd')
+    vi.stubEnv('GITHUB_REPO', 'engineering-metrics-dashboard')
+    vi.stubEnv('GIT_REPOS', '/tmp/repo-a')
+    vi.stubEnv('SESSIONS_PERIOD_DAYS', '30')
     mocks.mockGetLatestState.mockReturnValue({
       snapshot: null,
       lastRefreshAt: null,
@@ -38,6 +43,7 @@ describe('GET /api/state', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    vi.unstubAllEnvs()
   })
 
   it('sets Cache-Control: no-cache header', async () => {
@@ -137,6 +143,8 @@ describe('GET /api/state', () => {
             prsCreated: 8,
             prsMerged: 10,
             totalCommits: 12,
+            status: 'partial',
+            message: 'Partial data - one or more throughput sources failed during the last refresh',
           },
           cycleTime: {
             averageDays: 2.5,
@@ -144,6 +152,8 @@ describe('GET /api/state', () => {
             p95Days: 4,
             sampleSize: 8,
             sourceDay: '2026-06-14',
+            status: 'available',
+            message: null,
           },
           ci: {
             totalRuns: 10,
@@ -152,16 +162,22 @@ describe('GET /api/state', () => {
             passRate: 0.8,
             averageDurationMs: 1200,
             sourceDays: 1,
+            status: 'available',
+            message: null,
           },
           staleWork: {
             staleIssues: 2,
             stalePrs: 1,
             capturedAt: '2026-06-14T12:00:00.000Z',
             reflectsCompleteData: true,
+            status: 'available',
+            message: null,
           },
           sessionUsage: {
             totalSessions: 17,
             sessionErrorCount: 3,
+            status: 'available',
+            message: null,
           },
         },
         coverage: {

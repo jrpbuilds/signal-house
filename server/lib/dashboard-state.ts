@@ -5,6 +5,7 @@ import type {
   DashboardWindowDay,
   DashboardWindowCycleTimeSummary,
   DashboardWindowCISummary,
+  DashboardPanelStatus,
   DashboardWindowSessionSummary,
   DashboardWindowStaleWorkSummary,
   DashboardWindowThroughputSummary,
@@ -47,6 +48,22 @@ function unique(values: string[]): string[] {
   return Array.from(new Set(values))
 }
 
+function hasGithubConfig(): boolean {
+  return Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_OWNER && process.env.GITHUB_REPO)
+}
+
+function hasLocalGitConfig(): boolean {
+  return Boolean(process.env.GIT_REPOS && process.env.GIT_REPOS.split(',').map(part => part.trim()).filter(Boolean).length > 0)
+}
+
+function hasSessionConfig(): boolean {
+  return Boolean(process.env.SESSIONS_PERIOD_DAYS || process.env.OPENCODE_BIN || process.env.OPENCODE_COMMAND)
+}
+
+function hasWarning(rows: DailyMetricsRow[], patterns: RegExp[]): boolean {
+  return rows.some(row => row.warnings.some(warning => patterns.some(pattern => pattern.test(warning))))
+}
+
 function lastRowWithCycleTime(rows: DailyMetricsRow[]): DailyMetricsRow | null {
   for (let i = rows.length - 1; i >= 0; i -= 1) {
     const row = rows[i]
@@ -64,17 +81,55 @@ function latestRow(rows: DailyMetricsRow[]): DailyMetricsRow | null {
 }
 
 function buildThroughputSummary(rows: DailyMetricsRow[]): DashboardWindowThroughputSummary {
+  const configuredGithub = hasGithubConfig()
+  const configuredLocalGit = hasLocalGitConfig()
+  const partial = hasWarning(rows, [/GitHub/i, /local git/i])
+  const totalDataPoints = sumBy(rows, row => row.issuesOpened + row.issuesClosed + row.prsCreated + row.prsMerged + row.totalCommits)
+
+  let status: DashboardPanelStatus = 'available'
+  let message: string | null = null
+
+  if (!configuredGithub && !configuredLocalGit) {
+    status = 'unconfigured'
+    message = 'Throughput unavailable - configure GitHub and local git sources'
+  } else if (partial) {
+    status = totalDataPoints > 0 ? 'partial' : 'unavailable'
+    message = totalDataPoints > 0
+      ? 'Partial data - one or more throughput sources failed during the last refresh'
+      : 'Throughput unavailable - one or more sources failed during the last refresh'
+  } else if (rows.length === 0) {
+    status = 'empty'
+    message = 'No throughput data in this window'
+  }
+
   return {
     issuesOpened: sumBy(rows, row => row.issuesOpened),
     issuesClosed: sumBy(rows, row => row.issuesClosed),
     prsCreated: sumBy(rows, row => row.prsCreated),
     prsMerged: sumBy(rows, row => row.prsMerged),
     totalCommits: sumBy(rows, row => row.totalCommits),
+    status,
+    message,
   }
 }
 
 function buildCycleTimeSummary(rows: DailyMetricsRow[]): DashboardWindowCycleTimeSummary {
   const latest = lastRowWithCycleTime(rows)
+  const configuredGithub = hasGithubConfig()
+  const hasSourceError = hasWarning(rows, [/GitHub/i])
+  let status: DashboardPanelStatus = 'available'
+  let message: string | null = null
+
+  if (!configuredGithub) {
+    status = 'unconfigured'
+    message = 'Cycle time unavailable - configure GitHub access'
+  } else if (hasSourceError && latest == null) {
+    status = 'unavailable'
+    message = 'Cycle time unavailable - GitHub collector failed during the last refresh'
+  } else if (latest == null) {
+    status = 'empty'
+    message = 'No cycle time data in this window'
+  }
 
   return {
     averageDays: latest?.avgCycleTimeDays ?? null,
@@ -82,11 +137,15 @@ function buildCycleTimeSummary(rows: DailyMetricsRow[]): DashboardWindowCycleTim
     p95Days: latest?.p95CycleTimeDays ?? null,
     sampleSize: latest?.cycleTimeSampleSize ?? 0,
     sourceDay: latest?.day ?? null,
+    status,
+    message,
   }
 }
 
 function buildCiSummary(rows: DailyMetricsRow[]): DashboardWindowCISummary {
   const ciRows = rows.filter(row => row.ciTotalRuns > 0 || row.ciPassCount > 0 || row.ciFailCount > 0)
+  const configuredGithub = hasGithubConfig()
+  const hasSourceError = hasWarning(rows, [/check run/i, /workflow/i, /GitHub/i])
   const totalRuns = sumBy(ciRows, row => row.ciTotalRuns)
   const passCount = sumBy(ciRows, row => row.ciPassCount)
   const failCount = sumBy(ciRows, row => row.ciFailCount)
@@ -99,6 +158,20 @@ function buildCiSummary(rows: DailyMetricsRow[]): DashboardWindowCISummary {
     return sum + row.ciTotalRuns
   }, 0)
 
+  let status: DashboardPanelStatus = 'available'
+  let message: string | null = null
+
+  if (!configuredGithub) {
+    status = 'unconfigured'
+    message = 'CI health unavailable - configure GitHub access'
+  } else if (hasSourceError && totalRuns === 0) {
+    status = 'unavailable'
+    message = 'CI data unavailable - GitHub check runs could not be collected'
+  } else if (totalRuns === 0) {
+    status = 'empty'
+    message = 'No CI data in this window'
+  }
+
   return {
     totalRuns,
     passCount,
@@ -106,24 +179,61 @@ function buildCiSummary(rows: DailyMetricsRow[]): DashboardWindowCISummary {
     passRate: totalRuns > 0 ? passCount / totalRuns : null,
     averageDurationMs: durationWeight > 0 ? weightedDuration / durationWeight : null,
     sourceDays: ciRows.length,
+    status,
+    message,
   }
 }
 
 function buildStaleWorkSummary(rows: DailyMetricsRow[]): DashboardWindowStaleWorkSummary {
   const latest = latestRow(rows)
+  const configuredGithub = hasGithubConfig()
+  const hasSourceError = hasWarning(rows, [/GitHub/i])
+  const hasStaleWork = (latest?.staleIssues ?? 0) > 0 || (latest?.stalePrs ?? 0) > 0
+  let status: DashboardPanelStatus = 'available'
+  let message: string | null = null
+
+  if (!configuredGithub) {
+    status = 'unconfigured'
+    message = 'Stale work unavailable - configure GitHub access'
+  } else if (hasSourceError && !hasStaleWork) {
+    status = 'unavailable'
+    message = 'Stale work unavailable - GitHub collector failed during the last refresh'
+  } else if (!hasStaleWork) {
+    message = 'No stale work'
+  }
 
   return {
     staleIssues: latest?.staleIssues ?? 0,
     stalePrs: latest?.stalePrs ?? 0,
     capturedAt: latest?.capturedAt ?? null,
     reflectsCompleteData: latest?.reflectsCompleteData ?? null,
+    status,
+    message,
   }
 }
 
 function buildSessionSummary(rows: DailyMetricsRow[]): DashboardWindowSessionSummary {
+  const configuredSessions = hasSessionConfig()
+  const sessionTotal = sumBy(rows, row => row.totalSessions)
+  const hasSourceError = hasWarning(rows, [/opencode stats CLI unavailable/i, /session collector/i])
+  let status: DashboardPanelStatus = 'available'
+  let message: string | null = null
+
+  if (!configuredSessions) {
+    status = 'unconfigured'
+    message = 'Session metrics unavailable - configure OPENCODE_BIN or ensure opencode stats works'
+  } else if (hasSourceError && sessionTotal === 0) {
+    status = 'unavailable'
+    message = 'Session metrics unavailable - opencode stats could not be collected'
+  } else if (sessionTotal === 0) {
+    message = 'No session activity'
+  }
+
   return {
-    totalSessions: sumBy(rows, row => row.totalSessions),
+    totalSessions: sessionTotal,
     sessionErrorCount: sumBy(rows, row => row.sessionErrorCount),
+    status,
+    message,
   }
 }
 
@@ -141,7 +251,7 @@ function buildCoverage(rows: DailyMetricsRow[], missingDays: string[], warnings:
   }
 }
 
-export function buildDashboardWindow(rows: DailyMetricsRow[], now = new Date()): DashboardWindow {
+export function buildDashboardWindow(rows: DailyMetricsRow[], now = new Date(), isStale = false): DashboardWindow {
   const endDay = toUtcDay(now)
   const days = buildUtcDays(endDay)
   const rowsByDay = new Map(rows.map(row => [row.day, row]))
@@ -165,6 +275,21 @@ export function buildDashboardWindow(rows: DailyMetricsRow[], now = new Date()):
     ...(missingDays.length > 0 ? [`Missing ${missingDays.length} of ${WINDOW_DAYS} days in the rolling window`] : []),
   ])
 
+  const throughput = buildThroughputSummary(presentRows)
+  const cycleTime = buildCycleTimeSummary(presentRows)
+  const ci = buildCiSummary(presentRows)
+  const staleWork = buildStaleWorkSummary(presentRows)
+  const sessionUsage = buildSessionSummary(presentRows)
+
+  if (isStale) {
+    for (const panel of [throughput, cycleTime, ci, staleWork, sessionUsage]) {
+      if (panel.status === 'available') {
+        panel.status = 'stale'
+        panel.message = panel.message ?? 'Cached data may be stale'
+      }
+    }
+  }
+
   return {
     startDay: days[0] ?? endDay,
     endDay,
@@ -172,11 +297,11 @@ export function buildDashboardWindow(rows: DailyMetricsRow[], now = new Date()):
     missingDays,
     latestDay: latestRow(presentRows),
     cards: {
-      throughput: buildThroughputSummary(presentRows),
-      cycleTime: buildCycleTimeSummary(presentRows),
-      ci: buildCiSummary(presentRows),
-      staleWork: buildStaleWorkSummary(presentRows),
-      sessionUsage: buildSessionSummary(presentRows),
+      throughput,
+      cycleTime,
+      ci,
+      staleWork,
+      sessionUsage,
     },
     coverage: buildCoverage(presentRows, missingDays, rowWarnings),
     warnings,
