@@ -66,6 +66,7 @@ export function createSessionCollector(config: SessionCollectorConfig = {}) {
           })
 
           const lines = stdout.split('\n')
+
           const foundOverview = lines.some(line => line.includes('OVERVIEW'))
           const totalSessions = extractOverviewValue(lines, 'Sessions') ?? 0
           const messages = extractOverviewValue(lines, 'Messages')

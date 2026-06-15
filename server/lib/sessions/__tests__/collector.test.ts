@@ -16,10 +16,7 @@ function enoentErr(): Error {
   return err
 }
 
-function cliOutput(
-  overview: Record<string, number | string>,
-  tools: Array<{ name: string; count: number; pct: string }>,
-): string {
+function cliOutput(overview: Record<string, number | string>, tools: Array<{ name: string; count: number; pct: string }>): string {
   const section = (title: string, rows: string[]) => [
     '┌────────────────────────────────────────────────────────┐',
     `│${title}│`,
@@ -29,7 +26,7 @@ function cliOutput(
   ].join('\n')
 
   const overviewRows = Object.entries(overview).map(
-    ([k, v]) => `│ ${k.padEnd(28)} ${String(v).padStart(12)} │`,
+    ([k, v]) => `│${k.padEnd(48)}${String(v).padStart(6)} │`,
   )
 
   const toolRows = tools.map(
