@@ -49,6 +49,7 @@ const mockPRs = [
     html_url: '', user: { login: 'alice' }, labels: [],
     additions: 50, deletions: 10, changed_files: 3,
     head: { ref: 'feat1', sha: 'a' }, merged: true,
+    head_sha: 'a',
   },
 ]
 
@@ -57,6 +58,7 @@ const mockRuns = [
     id: 100, name: 'test', status: 'completed', conclusion: 'success',
     created_at: '2025-01-06T00:00:00Z', updated_at: '2025-01-06T01:00:00Z',
     head_branch: 'main', html_url: '', run_started_at: '2025-01-06T00:00:00Z',
+    head_sha: 'a',
     event: 'push', workflow_id: 1,
   },
 ]
@@ -83,6 +85,7 @@ describe('createCollector', () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(mockOkJson(mockIssues))
       .mockResolvedValueOnce(mockOkJson(mockPRs))
+      .mockResolvedValueOnce(mockOkJson(mockPRs[0]))
       .mockResolvedValueOnce(mockOkJson(mockWorkflows))
       .mockResolvedValueOnce(mockOkJson(mockRuns))
       .mockResolvedValueOnce(mockOkJson(mockRepo))
@@ -126,6 +129,28 @@ describe('createCollector', () => {
     expect(result.prsCount).toBe(0)
     expect(result.issuesCount).toBe(2)
     expect(result.errors.length).toBeGreaterThan(0)
+    expect(result.partialData).toBe(true)
+  })
+
+  it('warns when PR enrichment fails but keeps the list result', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(mockOkJson(mockIssues))
+      .mockResolvedValueOnce(mockOkJson(mockPRs))
+      .mockRejectedValueOnce(new Error('Detail fetch failed'))
+      .mockResolvedValueOnce(mockOkJson(mockWorkflows))
+      .mockResolvedValueOnce(mockOkJson(mockRuns))
+      .mockResolvedValueOnce(mockOkJson(mockRepo))
+
+    const collector = createCollector({
+      owner: 'test',
+      repo: 'repo',
+      token: 'ghp_test',
+    })
+
+    const result = await collector.collect()
+
+    expect(result.prsCount).toBe(1)
+    expect(result.errors.some(error => error.includes('Failed to enrich pull request #10'))).toBe(true)
     expect(result.partialData).toBe(true)
   })
 

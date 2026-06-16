@@ -101,6 +101,13 @@ const items = computed<StaleItem[]>(() => {
     const isBlocked = pr.ciStatus != null && pr.ciStatus !== 'success'
 
     if (isBlocked) {
+      const statusLabel = pr.ciStatus === 'failure'
+        ? 'CI failing'
+        : pr.ciStatus === 'pending'
+          ? 'CI pending'
+          : pr.ciStatus === 'cancelled'
+            ? 'CI cancelled'
+            : 'CI unknown'
       results.push({
         id: pr.id,
         kind: 'pr',
@@ -108,7 +115,7 @@ const items = computed<StaleItem[]>(() => {
         repo: pr.repo,
         url: pr.url,
         ageDays: age,
-        statusLabel: pr.ciStatus === 'failure' ? 'CI failing' : 'CI pending',
+        statusLabel,
         statusClass: 'blocked',
       })
     } else if (age >= STALE_PR_DAYS) {

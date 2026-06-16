@@ -28,6 +28,7 @@ export interface GHPullRequestRaw {
   state: 'open' | 'closed'
   created_at: string
   updated_at: string
+  head_sha?: string | null
   merged_at: string | null
   closed_at: string | null
   html_url: string
@@ -37,7 +38,7 @@ export interface GHPullRequestRaw {
   deletions: number
   changed_files: number
   head: { ref: string; sha: string }
-  merged: boolean
+  merged?: boolean
 }
 
 export interface GHWorkflowRunRaw {
@@ -47,6 +48,7 @@ export interface GHWorkflowRunRaw {
   conclusion: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required' | 'stale' | 'startup_failure' | null
   created_at: string
   updated_at: string
+  head_sha?: string | null
   head_branch: string
   html_url: string
   run_started_at: string
