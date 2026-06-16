@@ -11,6 +11,8 @@ export interface LocalGitRepoConfig {
 export interface LocalGitCollectorConfig {
   repos: LocalGitRepoConfig[]
   lookbackDays?: number
+  concurrency?: number
+  runGitCommand?: (args: string[], cwd: string) => Promise<string>
 }
 
 export interface RepoDiscoveryConfig {
