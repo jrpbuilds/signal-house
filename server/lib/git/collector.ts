@@ -1,21 +1,63 @@
-import { execSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { LocalGitCollectorConfig, LocalGitRepoInfo, LocalGitCollectorResult } from './types'
 
 const GIT_TIMEOUT = 10_000
+const DEFAULT_CONCURRENCY = 5
 
-function runGit(args: string[], cwd: string): string {
-  return execSync(`git ${args.join(' ')}`, {
-    cwd,
-    timeout: GIT_TIMEOUT,
-    stdio: 'pipe',
-    encoding: 'utf-8',
-  }).trim()
+async function runGit(args: string[], cwd: string): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    execFile(
+      'git',
+      args,
+      {
+        cwd,
+        timeout: GIT_TIMEOUT,
+        encoding: 'utf-8',
+      },
+      (error, stdout) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve((stdout ?? '').trim())
+      },
+    )
+  })
+}
+
+async function collectWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) {
+    return []
+  }
+
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const currentIndex = nextIndex
+      nextIndex += 1
+      if (currentIndex >= items.length) {
+        return
+      }
+      results[currentIndex] = await fn(items[currentIndex]!, currentIndex)
+    }
+  })
+
+  await Promise.all(workers)
+  return results
 }
 
 export function createLocalGitCollector(config: LocalGitCollectorConfig) {
+  const runGitCommand = config.runGitCommand ?? runGit
   const lookbackDays = config.lookbackDays ?? 30
+  const concurrency = Math.max(1, config.concurrency ?? DEFAULT_CONCURRENCY)
 
   async function inspectRepo(repoPath: string): Promise<LocalGitRepoInfo> {
     const resolvedPath = resolve(repoPath)
@@ -48,7 +90,7 @@ export function createLocalGitCollector(config: LocalGitCollectorConfig) {
 
     let isGitRepo = false
     try {
-      runGit(['rev-parse', '--git-dir'], resolvedPath)
+      await runGitCommand(['rev-parse', '--git-dir'], resolvedPath)
       isGitRepo = true
     } catch {
       return {
@@ -71,7 +113,7 @@ export function createLocalGitCollector(config: LocalGitCollectorConfig) {
 
     let defaultBranch: string | null = null
     try {
-      defaultBranch = runGit(['rev-parse', '--abbrev-ref', 'HEAD'], resolvedPath)
+      defaultBranch = await runGitCommand(['rev-parse', '--abbrev-ref', 'HEAD'], resolvedPath)
     } catch {
       defaultBranch = null
     }
@@ -83,11 +125,11 @@ export function createLocalGitCollector(config: LocalGitCollectorConfig) {
     let latestCommitAt: string | null = null
 
     try {
-      const dateOutput = runGit(
+      const dateOutput = await runGitCommand(
         ['log', `--since="${sinceDate}"`, '--format="%cI"'],
         resolvedPath,
       )
-      const lines = dateOutput ? dateOutput.split('\n') : []
+      const lines = dateOutput ? dateOutput.split('\n').map(line => line.trim()).filter(Boolean) : []
       recentCommits = lines.length
       for (const line of lines) {
         const clean = line.replace(/^"|"$/g, '').trim()
@@ -97,14 +139,14 @@ export function createLocalGitCollector(config: LocalGitCollectorConfig) {
         }
       }
 
-      const authorsOutput = runGit(
+      const authorsOutput = await runGitCommand(
         ['log', `--since="${sinceDate}"`, '--format=%aE'],
         resolvedPath,
       )
-      const rawAuthors = authorsOutput ? authorsOutput.split('\n') : []
+      const rawAuthors = authorsOutput ? authorsOutput.split('\n').map(author => author.trim()).filter(Boolean) : []
       authors = [...new Set(rawAuthors.map(a => a.trim()).filter(Boolean))].sort()
 
-      const latestOutput = runGit(['log', '-1', '--format=%cI'], resolvedPath)
+      const latestOutput = await runGitCommand(['log', '-1', '--format=%cI'], resolvedPath)
       latestCommitAt = latestOutput || null
     } catch {
       // git log commands can fail (empty repo), return what we have
@@ -130,9 +172,7 @@ export function createLocalGitCollector(config: LocalGitCollectorConfig) {
 
   return {
     async collect(): Promise<LocalGitCollectorResult> {
-      const results = await Promise.all(
-        config.repos.map(cfg => inspectRepo(cfg.path)),
-      )
+      const results = await collectWithConcurrency(config.repos, concurrency, cfg => inspectRepo(cfg.path))
       const errors = results.filter(r => r.error !== null).map(r => r.error!)
       return { repos: results, errors }
     },
