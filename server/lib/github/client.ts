@@ -89,6 +89,40 @@ export function createApiClient(opts: PAClientOptions) {
     return workflows
   }
 
+  async function fetchPullRequestDetail(number: number): Promise<GHPullRequestRaw> {
+    const { data } = await request<GHPullRequestRaw>(`/pulls/${number}`)
+    return data
+  }
+
+  function mapPullRequest(item: GHPullRequestRaw): PullRequestMetric {
+    let state: PullRequestMetric['state'] = 'open'
+    if (item.merged_at) {
+      state = 'merged'
+    } else if (item.state === 'closed') {
+      state = 'closed'
+    }
+
+    return {
+      id: String(item.number),
+      title: item.title,
+      state,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+      headSha: item.head_sha ?? item.head?.sha ?? null,
+      mergedAt: item.merged_at,
+      closedAt: item.closed_at,
+      repo: repoFullName,
+      repoKey,
+      author: item.user.login,
+      labels: (item.labels ?? []).map(l => l.name),
+      additions: item.additions,
+      deletions: item.deletions,
+      changedFiles: item.changed_files,
+      url: item.html_url,
+      ciStatus: null,
+    }
+  }
+
   return {
     async fetchIssues(): Promise<IssueMetric[]> {
       const raw = await paginate<GHIssueRaw>('/issues?state=all&filter=all&direction=desc')
@@ -114,36 +148,32 @@ export function createApiClient(opts: PAClientOptions) {
     },
 
     async fetchPullRequests(): Promise<PullRequestMetric[]> {
+      const { prs } = await this.fetchPullRequestsWithWarnings()
+      return prs
+    },
+
+    async fetchPullRequestsWithWarnings(): Promise<{ prs: PullRequestMetric[]; warnings: string[] }> {
       const raw = await paginate<GHPullRequestRaw>('/pulls?state=all&direction=desc&sort=updated')
       const prs: PullRequestMetric[] = []
+      const warnings: string[] = []
       for (const item of raw) {
-        let state: PullRequestMetric['state'] = 'open'
-        if (item.merged) {
-          state = 'merged'
-        } else if (item.state === 'closed') {
-          state = 'closed'
+        const mapped = mapPullRequest(item)
+
+        if (mapped.state === 'open' || mapped.state === 'merged') {
+          try {
+            const detail = await fetchPullRequestDetail(item.number)
+            prs.push(mapPullRequest(detail))
+            continue
+          } catch (err) {
+            warnings.push(
+              `Failed to enrich pull request #${item.number}: ${err instanceof Error ? err.message : String(err)}`,
+            )
+          }
         }
 
-        prs.push({
-          id: String(item.number),
-          title: item.title,
-          state,
-          createdAt: item.created_at,
-          updatedAt: item.updated_at,
-          mergedAt: item.merged_at,
-          closedAt: item.closed_at,
-          repo: repoFullName,
-          repoKey,
-          author: item.user.login,
-          labels: (item.labels ?? []).map(l => l.name),
-          additions: item.additions,
-          deletions: item.deletions,
-          changedFiles: item.changed_files,
-          url: item.html_url,
-          ciStatus: null,
-        })
+        prs.push(mapped)
       }
-      return prs
+      return { prs, warnings }
     },
 
     async fetchCheckRuns(): Promise<CheckRunMetric[]> {
@@ -161,6 +191,7 @@ export function createApiClient(opts: PAClientOptions) {
           repo: repoFullName,
           repoKey,
           branch: item.head_branch,
+          headSha: item.head_sha ?? null,
           workflowName: workflowNames.get(item.workflow_id) ?? `Workflow ${item.workflow_id}`,
           url: item.html_url,
         })

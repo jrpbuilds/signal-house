@@ -70,7 +70,8 @@ describe('createApiClient', () => {
         deletions: 50,
         changed_files: 5,
         head: { ref: 'feature', sha: 'abc123' },
-        merged: true,
+        head_sha: 'abc123',
+        merged: false,
       },
     ])
 
@@ -86,6 +87,58 @@ describe('createApiClient', () => {
     expect(prs[0]!.repo).toBe('test/repo')
   })
 
+  it('treats merged_at as the source of truth for merged PRs', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    fetchSpy
+      .mockResolvedValueOnce(new Response(JSON.stringify([
+        {
+          number: 8,
+          title: 'Fix bug',
+          state: 'closed',
+          created_at: '2025-01-01T00:00:00Z',
+          updated_at: '2025-01-10T00:00:00Z',
+          merged_at: '2025-01-10T00:00:00Z',
+          closed_at: '2025-01-10T00:00:00Z',
+          html_url: 'https://github.com/test/repo/pull/8',
+          user: { login: 'carol' },
+          labels: [],
+          additions: 0,
+          deletions: 0,
+          changed_files: 0,
+          head: { ref: 'fix', sha: 'def456' },
+          head_sha: 'def456',
+          merged: false,
+        },
+      ]), { status: 200, headers: new Headers({ 'content-type': 'application/json' }) }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        number: 8,
+        title: 'Fix bug',
+        state: 'closed',
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-10T00:00:00Z',
+        merged_at: '2025-01-10T00:00:00Z',
+        closed_at: '2025-01-10T00:00:00Z',
+        html_url: 'https://github.com/test/repo/pull/8',
+        user: { login: 'carol' },
+        labels: [],
+        additions: 12,
+        deletions: 3,
+        changed_files: 2,
+        head: { ref: 'fix', sha: 'def456' },
+        head_sha: 'def456',
+        merged: false,
+      }), { status: 200, headers: new Headers({ 'content-type': 'application/json' }) }))
+
+    const client = createApiClient({ token: 'tok', baseUrl: 'https://api.github.com/repos/test/repo' })
+    const prs = await client.fetchPullRequests()
+
+    expect(prs).toHaveLength(1)
+    expect(prs[0]!.state).toBe('merged')
+    expect(prs[0]!.additions).toBe(12)
+    expect(prs[0]!.deletions).toBe(3)
+    expect(prs[0]!.changedFiles).toBe(2)
+  })
+
   it('maps check runs from GitHub API response', async () => {
     let callCount = 0
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
@@ -98,12 +151,14 @@ describe('createApiClient', () => {
               id: 100, name: 'test', status: 'completed', conclusion: 'success',
               created_at: '2025-01-06T00:00:00Z', updated_at: '2025-01-06T01:00:00Z',
               head_branch: 'main', html_url: '', run_started_at: '2025-01-06T00:00:00Z',
+              head_sha: 'abc123',
               event: 'push', workflow_id: 1,
             },
             {
               id: 101, name: 'lint', status: 'completed', conclusion: 'failure',
               created_at: '2025-01-07T00:00:00Z', updated_at: '2025-01-07T02:00:00Z',
               head_branch: 'feat', html_url: '', run_started_at: '2025-01-07T00:00:00Z',
+              head_sha: 'def456',
               event: 'pull_request', workflow_id: 1,
             },
           ]
@@ -139,6 +194,7 @@ describe('createApiClient', () => {
               id: 200, name: 'test', status: 'in_progress', conclusion: null,
               created_at: '2025-01-06T00:00:00Z', updated_at: '2025-01-06T01:00:00Z',
               head_branch: 'main', html_url: '', run_started_at: '2025-01-06T00:00:00Z',
+              head_sha: 'abc123',
               event: 'push', workflow_id: 99,
             },
           ]
@@ -166,6 +222,7 @@ describe('createApiClient', () => {
           id: 300, name: 'test', status: 'completed', conclusion: 'success',
           created_at: '2025-01-06T00:00:00Z', updated_at: '2025-01-06T01:00:00Z',
           head_branch: 'main', html_url: '', run_started_at: '2025-01-06T00:00:00Z',
+          head_sha: 'abc123',
           event: 'push', workflow_id: 42,
         },
       ]), { status: 200, headers: new Headers({ 'content-type': 'application/json' }) }))

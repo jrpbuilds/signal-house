@@ -19,6 +19,7 @@ export interface PullRequestMetric {
   state: 'open' | 'closed' | 'merged'
   createdAt: string
   updatedAt: string
+  headSha: string | null
   mergedAt: string | null
   closedAt: string | null
   repo: string
@@ -39,6 +40,7 @@ export interface CheckRunMetric {
   conclusion: 'success' | 'failure' | 'neutral' | 'cancelled' | 'skipped' | 'timed_out' | 'action_required' | 'stale' | 'startup_failure' | null
   createdAt: string
   completedAt: string | null
+  headSha: string | null
   repo: string
   repoKey: string
   branch: string

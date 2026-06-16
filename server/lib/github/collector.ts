@@ -10,6 +10,43 @@ import { randomUUID } from 'node:crypto'
 
 type ProgressCallback = (progress: CollectorProgress) => void
 
+function deriveCiStatus(
+  prs: PullRequestMetric[],
+  checkRuns: CheckRunMetric[],
+): PullRequestMetric[] {
+  const runsBySha = new Map<string, CheckRunMetric[]>()
+  for (const run of checkRuns) {
+    if (!run.headSha) continue
+    const list = runsBySha.get(run.headSha) ?? []
+    list.push(run)
+    runsBySha.set(run.headSha, list)
+  }
+
+  return prs.map((pr) => {
+    if (!pr.headSha) return { ...pr, ciStatus: null }
+
+    const matchingRuns = runsBySha.get(pr.headSha) ?? []
+    if (matchingRuns.length === 0) return { ...pr, ciStatus: null }
+
+    const latestRun = matchingRuns
+      .slice()
+      .sort((a, b) => new Date(b.completedAt ?? b.createdAt).getTime() - new Date(a.completedAt ?? a.createdAt).getTime())[0]!
+
+    let ciStatus: PullRequestMetric['ciStatus'] = null
+    if (latestRun.status !== 'completed') {
+      ciStatus = 'pending'
+    } else if (latestRun.conclusion === 'success') {
+      ciStatus = 'success'
+    } else if (latestRun.conclusion === 'failure' || latestRun.conclusion === 'timed_out' || latestRun.conclusion === 'startup_failure') {
+      ciStatus = 'failure'
+    } else if (latestRun.conclusion === 'cancelled') {
+      ciStatus = 'cancelled'
+    }
+
+    return { ...pr, ciStatus }
+  })
+}
+
 export async function collectWithConcurrency<T, R>(
   items: T[],
   limit: number,
@@ -75,9 +112,15 @@ export function createCollector(config: GitHubCollectorConfig, onProgress?: Prog
 
     try {
       emit('fetching', 'Fetching pull requests from GitHub...')
-      const prs = await apiClient.fetchPullRequests()
+      const client = apiClient as GitHubApiClient & {
+        fetchPullRequestsWithWarnings?: () => Promise<{ prs: PullRequestMetric[]; warnings: string[] }>
+      }
+      const enriched = client.fetchPullRequestsWithWarnings
+        ? await client.fetchPullRequestsWithWarnings()
+        : { prs: await apiClient.fetchPullRequests(), warnings: [] }
+      const { prs, warnings } = enriched
       rawCache.set('pullRequests', prs)
-      return { prs, errors: [] }
+      return { prs, errors: warnings }
     } catch (err) {
       const msg = `Failed to fetch pull requests: ${err instanceof Error ? err.message : String(err)}`
       return { prs: [], errors: [msg] }
@@ -134,8 +177,10 @@ export function createCollector(config: GitHubCollectorConfig, onProgress?: Prog
 
       emit('deriving', 'Computing aggregate signals...')
 
+      const prsWithCi = deriveCiStatus(prs, checkRuns)
+
       const deriveConfig = { staleThresholdDays, lookbackDays }
-      const aggregates = deriveAll(issues, prs, checkRuns, deriveConfig)
+      const aggregates = deriveAll(issues, prsWithCi, checkRuns, deriveConfig)
 
       const captureTime = new Date()
       const capturedAt = captureTime.toISOString()
@@ -156,7 +201,7 @@ export function createCollector(config: GitHubCollectorConfig, onProgress?: Prog
         id: snapshotId,
         capturedAt,
         issues,
-        pullRequests: prs,
+        pullRequests: prsWithCi,
         checkRuns,
         repositories: repo ? [repo] : [],
         sessions: [],
@@ -211,7 +256,7 @@ export function createCollector(config: GitHubCollectorConfig, onProgress?: Prog
         snapshotId,
         capturedAt,
         issuesCount: issues.length,
-        prsCount: prs.length,
+        prsCount: prsWithCi.length,
         checkRunsCount: checkRuns.length,
         errors: allErrors,
         partialData,

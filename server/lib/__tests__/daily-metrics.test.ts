@@ -27,6 +27,7 @@ function makePullRequest(overrides: Partial<MetricSnapshot['pullRequests'][numbe
     state: 'merged',
     createdAt: '2026-06-01T10:00:00Z',
     updatedAt: '2026-06-01T10:00:00Z',
+    headSha: 'abc123',
     mergedAt: '2026-06-02T10:00:00Z',
     closedAt: null,
     repo: 'r',
