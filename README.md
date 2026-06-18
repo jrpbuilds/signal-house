@@ -10,6 +10,8 @@ It answers one blunt question:
 
 It is not a generic analytics dashboard. It is not a full observability platform. It is a focused workstream health screen for the person running OpenClaw day to day.
 
+Signal House runs as a single long-running local daemon. It serves the Nuxt dashboard, owns the local SQLite state, and keeps the dashboard warm by refreshing on its own schedule.
+
 Signal House should make it obvious whether work is moving, where it is getting stuck, whether PRs are progressing, whether CI is behaving, and whether the system is collecting useful signal instead of noise.
 
 ## What Signal House tracks
@@ -64,7 +66,7 @@ Signal House uses:
 
 The stack is deliberately boring where it matters.
 
-Nuxt keeps the server and UI in one place. Vue fits the dashboard UI well. TypeScript keeps the data model honest. SQLite is a simple local store for cached snapshots and refresh state. ECharts is enough for useful trend charts without turning charts into their own project.
+Nuxt keeps the server and UI in one place. Vue fits the dashboard UI well. TypeScript keeps the data model honest. SQLite is a simple local store for cached dashboard state, refresh state, and daily rollups. ECharts is enough for useful trend charts without turning charts into their own project.
 
 ## Architecture
 
@@ -259,7 +261,7 @@ A manual refresh:
 * is rejected with `HTTP 409` if another refresh is already in progress (manual or scheduled)
 * preserves the last good data if collection fails
 
-GitHub rate limits still apply. If GitHub is slow, unreachable, or rate-limited, Signal House should show the cached snapshot with a clear stale or partial-data warning.
+GitHub rate limits still apply. If GitHub is slow, unreachable, or rate-limited, Signal House should show the cached state with a clear stale or partial-data warning.
 
 ## Background polling
 
@@ -269,7 +271,7 @@ The poller:
 
 * is owned by the server process and started by `server/plugins/poller.ts`
 * waits for the configured startup delay
-* optionally runs once on startup
+* runs once on startup when configured to do so
 * refreshes at the configured interval
 * uses the same refresh runner as manual refresh
 * uses the same in-process concurrency guard as manual refresh
@@ -300,7 +302,7 @@ Returns HTTP 409 if a refresh is already in progress.
 
 The response includes:
 
-* latest snapshot data
+* latest cached state
 * refresh status
 * stale-data status
 * source health
@@ -378,7 +380,7 @@ Use the repo’s actual scripts as the source of truth. If a script is missing o
 
 ## Running as a local service
 
-Signal House is intended to run as a persistent local Node service on the machine that hosts Clawd.
+Signal House is intended to run as a persistent local Node service on the machine that hosts Clawd. It can be bound to the LAN when needed, but LAN exposure should be treated as untrusted until optional protection is enabled.
 
 A typical production run is:
 
@@ -405,6 +407,7 @@ Restart=on-failure
 RestartSec=5
 User=openclaw
 Group=openclaw
+# The service should be the only Signal House instance touching this DB.
 
 [Install]
 WantedBy=multi-user.target
@@ -426,7 +429,7 @@ journalctl -u signal-house -f
 
 ## Firewall note
 
-If the dashboard should be available on the LAN, allow port `3000`.
+If the dashboard should be available on the LAN, allow port `3000` and set `SECRET_HOUSE_ACCESS_PASSWORD` to enable the optional protection gate.
 
 ```bash
 # firewalld
@@ -455,6 +458,32 @@ Avoid:
 * decorative charts
 * dashboards that require interpretation archaeology
 * abstractions added before the local workflow proves they are needed
+
+## Optional LAN protection
+
+By default, Signal House stays local-first and does not require any extra setup. If you bind it to the LAN or open the firewall, the app and local API become reachable from other devices on the network. That is useful for a trusted home or lab network, but it is not safe to treat as public access.
+
+You can enable a lightweight shared-secret gate with two env vars:
+
+```bash
+SECRET_HOUSE_ACCESS_USERNAME=signal-house
+SECRET_HOUSE_ACCESS_PASSWORD=choose-a-long-random-password
+```
+
+When enabled, requests must use HTTP Basic auth with those credentials. This protects the dashboard, API routes, and built-in server assets. It does not add users, sessions, roles, OAuth, or any multi-user account system.
+
+What is protected:
+
+* the dashboard pages
+* `/api/state`
+* `/api/refresh`
+* built-in server assets and other Nitro-served routes
+
+What is not protected:
+
+* your network transport
+* the host machine itself
+* any reverse proxy or firewall you put in front of Signal House
 
 ## Current boundaries
 
