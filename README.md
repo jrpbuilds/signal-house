@@ -10,7 +10,7 @@ It answers one blunt question:
 
 It is not a generic analytics dashboard. It is not a full observability platform. It is a focused workstream health screen for the person running OpenClaw day to day.
 
-Signal House runs as a single long-running local daemon. It serves the Nuxt dashboard, owns the local SQLite state, and keeps the dashboard warm by refreshing on its own schedule.
+Signal House runs as a single long-running local daemon. It serves the dashboard, owns the local SQLite state, and keeps the dashboard warm by refreshing on its own schedule.
 
 Signal House should make it obvious whether work is moving, where it is getting stuck, whether PRs are progressing, whether CI is behaving, and whether the system is collecting useful signal instead of noise.
 
@@ -38,7 +38,7 @@ It should provide:
 * a top-level health summary
 * recent throughput trends
 * cycle time and stale-work indicators
-* a compact blocked/stale work table
+* a compact blocked/stale work queue
 * recent CI and check outcomes
 * recent OpenCode/OpenClaw session usage where available
 * clear refresh status
@@ -56,35 +56,37 @@ If a metric is not available, Signal House should say that plainly. The right fi
 
 ## Stack
 
-Signal House uses:
+Signal House uses two codebases in a single repo:
 
-* Nuxt 3
-* Vue 3
-* TypeScript
-* ECharts
-* SQLite
+| Layer | Technology | Directory |
+|-------|-----------|-----------|
+| Dashboard UI | Next.js 16, React 19, TypeScript | `frontend/` |
+| Styling | Tailwind CSS 4, shadcn/ui | `frontend/` |
+| State | Zustand | `frontend/` |
+| Charts | ECharts | `frontend/` |
+| Animation | Framer Motion | `frontend/` |
+| Backend / DB | Node.js, TypeScript, better-sqlite3 | `server/` |
+| Data collectors | GitHub API, git, OpenCode CLI | `server/lib/` |
+| Database | SQLite | `.data/metrics.db` |
 
-The stack is deliberately boring where it matters.
-
-Nuxt keeps the server and UI in one place. Vue fits the dashboard UI well. TypeScript keeps the data model honest. SQLite is a simple local store for cached dashboard state, refresh state, and daily rollups. ECharts is enough for useful trend charts without turning charts into their own project.
+The backend modules (`server/db/`, `server/lib/`) are imported and called by the Next.js API routes at build time. Everything runs in a single process.
 
 ## Architecture
 
-Signal House runs as a single long-running local Node/Nuxt daemon.
+Signal House runs as a single long-running local Node process.
 
 ```text
 Signal House daemon (one local process)
-├── serves the dashboard UI
-├── exposes local API routes
-├── owns the local SQLite database
-├── boots the background refresh loop on process startup
-├── owns the scheduler lifecycle
-├── shares one refresh runner between scheduled and manual refresh
+├── serves the Next.js dashboard UI on port 8999
+├── exposes local API routes (GET /api/state, GET /api/diagnostics, POST /api/refresh)
+├── imports backend modules from server/db and server/lib
+├── owns the local SQLite database at .data/metrics.db
+├── runs the background refresh loop on process startup (see note below)
 ├── rejects overlapping refreshes with a single in-process guard
 └── exits cleanly, clearing the poller timer and in-memory state
 ```
 
-The frontend only reads from local API routes. It does not call GitHub or local tools directly.
+The frontend reads from local API routes only. It does not call GitHub or local tools directly.
 
 The intended shape is:
 
@@ -96,6 +98,26 @@ The intended shape is:
 * manual refresh uses the same runner and the same concurrency guard as scheduled refresh
 * failed refreshes do not wipe the last good data
 
+### Data flow
+
+```
+OpenCode CLI ───► server/lib/sessions/collector ───┐
+GitHub API   ───► server/lib/github/collector   ───┤
+git local    ───► server/lib/git/collector      ───┼──► server/db/client.ts (SQLite)
+OpenCode     ───► server/lib/opencode-daily     ───┘
+                (orchestrated by server/lib/orchestrator/)
+                                                         │
+                                                         ▼
+API routes (Next.js) ◄── getLatestState(), buildDashboardWindow(), buildDiagnostics()
+    │
+    ▼
+Dashboard UI (React/Next.js) ◄── fetch('/api/state') via zustand store
+```
+
+### Background poller — current status
+
+The poller logic lives in `server/plugins/poller.ts` as a Nitro plugin. In the current Next.js deployment, this plugin does **not** run automatically at startup. Manual refresh via `POST /api/refresh` works, but scheduled background polling is a pending gap. Once the API routes are ported (see issue track), the poller will be re-enabled as part of the Next.js app startup.
+
 ### Runtime contract
 
 Signal House is daemon-first and single-instance. It assumes:
@@ -105,7 +127,6 @@ Signal House is daemon-first and single-instance. It assumes:
 * the background poller is started by the server process at startup, not by page or API requests
 * scheduled refresh and manual refresh share the same runner and the same single-flight guard
 * the poller timer and in-memory state are cleared on shutdown
-* dev/reload does not create duplicate poller loops or leave stale in-memory state behind
 
 Request-time collection, multi-instance, and serverless deployment models are not supported operating modes.
 
@@ -132,17 +153,25 @@ Data sources should fail gracefully. A missing optional source should produce a 
 
 ### Install
 
+Root dependencies (backend modules, shared types):
+
 ```bash
 npm install
+```
+
+Frontend dependencies (Next.js, React, UI components):
+
+```bash
+cd frontend && npm install && cd ..
 ```
 
 ### Run the dev server
 
 ```bash
-npm run dev
+cd frontend && npm run dev
 ```
 
-The dev server is configured to bind to `0.0.0.0`, so it can be reached from other devices on the same LAN.
+The frontend dev server runs on port 3000 by default. The production service uses port 8999.
 
 Expected URLs:
 
@@ -161,9 +190,17 @@ hostname -I | awk '{print $1}'
 ipconfig getifaddr en0
 ```
 
+### Build for production
+
+```bash
+cd frontend && npm run build    # builds Next.js frontend (this is what runs in production)
+```
+
+The root `npm run build` builds the Nuxt/Nitro server output (`.output/server/index.mjs`). This is used for backend unit tests, not for the production service. The production service runs from the `frontend/` Next.js build.
+
 ## Configuration
 
-Create a `.env` file in the project root.
+The service reads from `~/.config/clawd/signal-house.env`. Local dev can use a `.env` file.
 
 Runtime defaults are centralized in `server/lib/runtime-config.ts`, which is the source of truth for poller, dashboard, database refresh history, discovery, orchestrator, and session-collector defaults.
 
@@ -186,6 +223,8 @@ SECRET_HOUSE_POLLER_ENABLED=true
 SECRET_HOUSE_POLL_INTERVAL_SECONDS=300
 SECRET_HOUSE_POLL_STARTUP_DELAY_SECONDS=5
 SECRET_HOUSE_RUN_ON_STARTUP=true
+
+DB_DIR=/home/openclaw/projects/signal-house/.data
 ```
 
 ### GitHub configuration
@@ -282,6 +321,8 @@ The poller:
 
 Manual refresh and scheduled refresh must not fork into separate logic. They share the same runner and the same concurrency guard. If a manual refresh is requested while the poller is mid-run, the manual endpoint responds with `409 Conflict`; if a scheduled tick fires while a manual refresh is running, the poller logs the skip and waits for the next interval.
 
+> **Note:** The poller plugin uses Nitro server hooks and does not currently start as part of the Next.js deployment. Automatic background polling is a pending gap. See the Architecture section for status.
+
 ## API shape
 
 The main dashboard endpoint is:
@@ -292,6 +333,12 @@ GET /api/state
 
 It returns the latest cached dashboard state, refresh metadata, and the rolling 28-day dashboard window.
 
+A diagnostics endpoint provides detailed collector status:
+
+```text
+GET /api/diagnostics
+```
+
 A manual refresh is triggered via:
 
 ```text
@@ -300,14 +347,14 @@ POST /api/refresh
 
 Returns HTTP 409 if a refresh is already in progress.
 
-The response includes:
+The `GET /api/state` response includes:
 
-* latest cached state
+* latest cached snapshot
 * refresh status
 * stale-data status
 * source health
-* dashboard cards
-* 28-day chart window
+* selected repo dashboard window (28 days of trend data)
+* session usage summaries and model usage
 * data coverage and warnings
 
 The dashboard should be able to tell the difference between:
@@ -370,13 +417,16 @@ This lets charts and cards stay honest about incomplete data.
 Run the local verification commands before merging changes:
 
 ```bash
-npm ci
+# Backend unit tests
 npm test
-npm run typecheck
-npm run build
+
+# Frontend type check + build
+cd frontend && npx tsc --noEmit && npm run build
 ```
 
-Use the repo’s actual scripts as the source of truth. If a script is missing or fails for environmental reasons, document that clearly.
+> The root `npm run typecheck` runs `nuxt typecheck`, which depends on the old Nuxt config. Prefer `npx tsc --noEmit` from the `frontend/` directory for type checking.
+
+Use the repo's actual scripts as the source of truth. If a script is missing or fails for environmental reasons, document that clearly.
 
 ## Running as a local service
 
@@ -385,59 +435,60 @@ Signal House is intended to run as a persistent local Node service on the machin
 A typical production run is:
 
 ```bash
+cd frontend
 npm ci
 npm run build
-node .output/server/index.mjs
+npm run start -- --hostname 0.0.0.0 --port 8999
 ```
 
-Example systemd unit:
+### Systemd user service
+
+The project ships a user-level systemd unit at `~/.config/systemd/user/clawd-signal-house.service`:
 
 ```ini
 [Unit]
-Description=Signal House
+Description=Clawd Signal House
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/openclaw/projects/signal-house
-EnvironmentFile=/home/openclaw/projects/signal-house/.env
-ExecStart=/usr/bin/node .output/server/index.mjs
+WorkingDirectory=/home/openclaw/projects/barkley-clawd/signal-house/frontend
+EnvironmentFile=%h/.config/clawd/signal-house.env
+Environment=NODE_ENV=production
+Environment=PATH=/home/openclaw/.nvm/versions/node/v24.16.0/bin:/usr/bin:/bin
+Environment=PORT=8999
+Environment=HOST=0.0.0.0
+ExecStart=/home/openclaw/.nvm/versions/node/v24.16.0/bin/npm run start -- --hostname 0.0.0.0 --port 8999
 Restart=on-failure
 RestartSec=5
-User=openclaw
-Group=openclaw
-# The service should be the only Signal House instance touching this DB.
+StandardOutput=journal
+StandardError=journal
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 ```
 
-Reload and start:
+Manage it:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now signal-house
-sudo systemctl status signal-house
-```
-
-View logs:
-
-```bash
-journalctl -u signal-house -f
+systemctl --user daemon-reload
+systemctl --user restart clawd-signal-house.service
+systemctl --user status clawd-signal-house.service
+journalctl --user -u clawd-signal-house.service -f
 ```
 
 ## Firewall note
 
-If the dashboard should be available on the LAN, allow port `3000` and set `SECRET_HOUSE_ACCESS_PASSWORD` to enable the optional protection gate.
+If the dashboard should be available on the LAN, allow port `8999` and set `SECRET_HOUSE_ACCESS_PASSWORD` to enable the optional protection gate.
 
 ```bash
 # firewalld
-sudo firewall-cmd --add-port=3000/tcp --permanent
+sudo firewall-cmd --add-port=8999/tcp --permanent
 sudo firewall-cmd --reload
 
 # iptables
-sudo iptables -A INPUT -p tcp --dport 3000 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 8999 -j ACCEPT
 ```
 
 ## Design principles
@@ -476,14 +527,35 @@ What is protected:
 
 * the dashboard pages
 * `/api/state`
+* `/api/diagnostics`
 * `/api/refresh`
-* built-in server assets and other Nitro-served routes
 
 What is not protected:
 
 * your network transport
 * the host machine itself
 * any reverse proxy or firewall you put in front of Signal House
+
+## Repo layout
+
+```
+/
+├── server/            Backend modules (DB, collectors, refresh runner)
+│   ├── db/            SQLite database layer (client, schema, migrations)
+│   ├── lib/           Business logic (collectors, dashboard state, diagnostics)
+│   ├── plugins/       Nitro server plugins (poller, DB init)
+│   └── middleware/     Nitro server middleware (access protection)
+├── frontend/          Next.js dashboard application
+│   ├── src/app/       App Router pages and API routes
+│   ├── src/components/ React components
+│   ├── src/store/     Zustand state management
+│   ├── src/lib/       API client and utilities
+│   └── src/types/     TypeScript type definitions (re-exported from root types/)
+├── types/             Shared TypeScript type definitions
+├── .data/             SQLite database directory (gitignored)
+├── .output/           Nuxt/Nitro build output (backend unit tests only, not deployed)
+└── frontend/README.md  Boilerplate from create-next-app (not actively maintained)
+```
 
 ## Current boundaries
 
@@ -513,4 +585,3 @@ If the answer is unclear, do not add the metric yet.
 ## License
 
 Signal House is licensed under the MIT License.
-
